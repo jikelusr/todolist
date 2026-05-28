@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     <title>极简工作看板 · 策划｜美术｜程序</title>
+    <!-- SeaTable JavaScript SDK -->
+    <script src="https://cdn.seatable.cn/sdk/dtable-sdk/1.5.0/dtable-sdk.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -385,15 +387,13 @@
 
 <script>
     // ========== SeaTable 配置 ==========
-    // 请替换成你的信息
     const SEATABLE_CONFIG = {
         server: 'https://cloud.seatable.cn',
-        apiToken: '89b7226a830c9fb7ddfa08200409c7a587b5e153',      // 替换成你的 API Token
-        tableUUID: 'd464007f-d6af-47bd-b1d7-8ee843a308b6',      // 替换成你的表格 UUID
-        tableName: 'jike_todolist'              // 你的表格名称
+        apiToken: '89b7226a830c9fb7ddfa08200409c7a587b5e153',
+        tableName: 'jike_todolist'
     };
     
-    // 列名映射（根据你的表格列名调整）
+    // 列名映射（请根据你的表格实际列名调整）
     const COLUMNS = {
         title: '标题',
         description: '描述',
@@ -405,55 +405,40 @@
     // ========== 全局变量 ==========
     let currentRole = '策划';
     let allTasks = [];
-    let currentAccessToken = null;
-    let dtableServer = null;
+    let dtableClient = null;
+    let isInitialized = false;
     
-    // ========== SeaTable API 调用 ==========
-    async function getAccessToken() {
-        const url = `${SEATABLE_CONFIG.server}/api/v2.1/dtable/app-access-token/`;
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Token ${SEATABLE_CONFIG.apiToken}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        if (!response.ok) {
-            throw new Error(`获取 token 失败: ${response.status}`);
+    // ========== 初始化 SeaTable SDK ==========
+    async function initSeaTable() {
+        try {
+            dtableClient = new window.DTable();
+            await dtableClient.init({
+                server: SEATABLE_CONFIG.server,
+                APIToken: SEATABLE_CONFIG.apiToken
+            });
+            isInitialized = true;
+            console.log('SeaTable SDK 初始化成功');
+            return true;
+        } catch (error) {
+            console.error('SeaTable SDK 初始化失败:', error);
+            document.getElementById('globalStats').innerHTML = '初始化失败，请刷新重试';
+            return false;
         }
-        
-        const data = await response.json();
-        currentAccessToken = data.access_token;
-        dtableServer = data.dtable_server;
-        return { access_token: data.access_token, dtable_server: data.dtable_server };
     }
     
+    // ========== 读取表格数据 ==========
     async function loadTasksFromSeaTable() {
+        if (!isInitialized) {
+            const success = await initSeaTable();
+            if (!success) return false;
+        }
+        
         try {
-            // 获取 access token
-            if (!currentAccessToken) {
-                await getAccessToken();
-            }
+            // 获取表格的所有行
+            const rows = await dtableClient.listRows(SEATABLE_CONFIG.tableName);
             
-            // 读取表格数据
-            const url = `${dtableServer}/api/v1/dtables/${SEATABLE_CONFIG.tableUUID}/rows/?table_name=${SEATABLE_CONFIG.tableName}`;
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${currentAccessToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-            
-            if (!response.ok) {
-                throw new Error(`读取数据失败: ${response.status}`);
-            }
-            
-            const data = await response.json();
-            
-            // 转换 SeaTable 数据格式
-            allTasks = data.rows.map(row => ({
+            // 转换数据格式
+            allTasks = rows.map(row => ({
                 _id: row._id,
                 title: row[COLUMNS.title] || '',
                 description: row[COLUMNS.description] || '',
@@ -471,75 +456,45 @@
         }
     }
     
+    // ========== 添加任务 ==========
     async function addTaskToSeaTable(title, description, role) {
+        if (!isInitialized) {
+            const success = await initSeaTable();
+            if (!success) return false;
+        }
+        
         try {
-            if (!currentAccessToken) {
-                await getAccessToken();
-            }
-            
             const newRow = {
-                table_name: SEATABLE_CONFIG.tableName,
-                row: {
-                    [COLUMNS.title]: title,
-                    [COLUMNS.description]: description,
-                    [COLUMNS.role]: role,
-                    [COLUMNS.status]: 'todo',
-                    [COLUMNS.date]: getCurrentDate()
-                }
+                [COLUMNS.title]: title,
+                [COLUMNS.description]: description,
+                [COLUMNS.role]: role,
+                [COLUMNS.status]: 'todo',
+                [COLUMNS.date]: getCurrentDate()
             };
             
-            const url = `${dtableServer}/api/v1/dtables/${SEATABLE_CONFIG.tableUUID}/rows/`;
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${currentAccessToken}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(newRow)
-            });
-            
-            if (!response.ok) {
-                throw new Error(`添加任务失败: ${response.status}`);
-            }
-            
-            // 重新加载数据
+            await dtableClient.appendRow(SEATABLE_CONFIG.tableName, newRow);
             await loadTasksFromSeaTable();
             return true;
         } catch (error) {
             console.error('添加任务失败:', error);
-            alert('添加任务失败，请重试');
+            alert('添加任务失败，请重试\n\n错误详情：' + (error.message || '请检查网络'));
             return false;
         }
     }
     
+    // ========== 更新任务状态 ==========
     async function updateTaskStatus(taskId, newStatus) {
+        if (!isInitialized) {
+            const success = await initSeaTable();
+            if (!success) return false;
+        }
+        
         try {
-            if (!currentAccessToken) {
-                await getAccessToken();
-            }
-            
             const updateData = {
-                table_name: SEATABLE_CONFIG.tableName,
-                row_id: taskId,
-                row: {
-                    [COLUMNS.status]: newStatus
-                }
+                [COLUMNS.status]: newStatus
             };
             
-            const url = `${dtableServer}/api/v1/dtables/${SEATABLE_CONFIG.tableUUID}/rows/`;
-            const response = await fetch(url, {
-                method: 'PUT',
-                headers: {
-                    'Authorization': `Bearer ${currentAccessToken}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(updateData)
-            });
-            
-            if (!response.ok) {
-                throw new Error(`更新状态失败: ${response.status}`);
-            }
-            
+            await dtableClient.updateRow(SEATABLE_CONFIG.tableName, taskId, updateData);
             await loadTasksFromSeaTable();
             return true;
         } catch (error) {
@@ -549,25 +504,15 @@
         }
     }
     
+    // ========== 删除任务 ==========
     async function deleteTaskFromSeaTable(taskId) {
+        if (!isInitialized) {
+            const success = await initSeaTable();
+            if (!success) return false;
+        }
+        
         try {
-            if (!currentAccessToken) {
-                await getAccessToken();
-            }
-            
-            const url = `${dtableServer}/api/v1/dtables/${SEATABLE_CONFIG.tableUUID}/rows/${taskId}/?table_name=${SEATABLE_CONFIG.tableName}`;
-            const response = await fetch(url, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${currentAccessToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-            
-            if (!response.ok) {
-                throw new Error(`删除任务失败: ${response.status}`);
-            }
-            
+            await dtableClient.deleteRow(SEATABLE_CONFIG.tableName, taskId);
             await loadTasksFromSeaTable();
             return true;
         } catch (error) {
@@ -724,9 +669,11 @@
                 return;
             }
             
-            await addTaskToSeaTable(title, description, role);
-            clearForm();
-            titleInput.focus();
+            const success = await addTaskToSeaTable(title, description, role);
+            if (success) {
+                clearForm();
+                titleInput.focus();
+            }
         });
         
         [titleInput, descInput].forEach(input => {
@@ -741,6 +688,7 @@
     
     async function init() {
         bindEvents();
+        await initSeaTable();
         await loadTasksFromSeaTable();
     }
     
